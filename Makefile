@@ -1,3 +1,5 @@
+.PHONY: check-env check-3xui up down logs nginx-http ssl-init ssl-renew cron-install cron-remove restart gen-pass 3xui-change-password 3xui-create-inbound 3xui-inbound-exists 3xui-ensure-inbound 3xui-export-creds 3xui-init deploy
+
 include .env
 export
 
@@ -5,8 +7,9 @@ export
 
 XUI_PASS_FILE=$(HOME)/creds.txt
 CREDS_FILE=$(HOME)/creds.txt
+XUI_CONTAINER=xray
 INBOUND_REMARK=$(DOMAIN)-$(NETWORK_PORT)
-CRON_CMD=cd $(PWD) && make ssl-renew >> /var/log/ssl-renew.log 2>&1
+CRON_CMD=cd $(PWD) && $(MAKE) ssl-renew >> /var/log/ssl-renew.log 2>&1
 CRON_JOB=0 3 * * * $(CRON_CMD)
 
 check-env:
@@ -23,22 +26,22 @@ check-3xui:
 up: check-env
 	envsubst '$$DOMAIN $$UI_DUMMY_PATH $$UI_PATH $$UI_PORT $$NETWORK_PATH $$NETWORK_PORT' \
 		< nginx/main.conf.template > nginx/default.conf
-	docker compose up -d --build --force-recreate
+	docker-compose up -d --build --force-recreate
 
 down:
-	docker compose down
+	docker-compose down
 
 logs:
-	docker compose logs -f nginx
+	docker-compose logs -f nginx
 
 nginx-http: check-env
 	envsubst '$$DOMAIN $$UI_DUMMY_PATH $$UI_PATH $$UI_PORT $$NETWORK_PATH $$NETWORK_PORT' \
 		< nginx/no_ssl.conf.template > nginx/default.conf
-	docker compose up -d --force-recreate --build nginx
+	docker-compose up -d --force-recreate --build nginx
 
 ssl-init: check-env
 	@echo "🔐 Выпуск SSL-сертификата для $(DOMAIN)"
-	docker compose run --rm certbot certonly \
+	docker-compose run --rm certbot certonly \
 		--webroot \
 		--webroot-path=/var/www/certbot \
 		--email $(EMAIL) \
@@ -48,8 +51,8 @@ ssl-init: check-env
 
 ssl-renew:
 	@echo "♻️ Обновление SSL-сертификатов"
-	docker compose run --rm certbot renew
-	docker compose restart nginx
+	docker-compose run --rm certbot renew
+	docker-compose restart nginx
 
 cron-install:
 	@echo "⏱ Установка cron-задачи для SSL"
@@ -63,8 +66,8 @@ cron-remove:
 	@crontab -l 2>/dev/null | grep -v 'make ssl-renew' | crontab - || true
 
 restart:
-	make down
-	make up
+	$(MAKE) down
+	$(MAKE) up
 
 # Генерация пароля
 gen-pass:
@@ -78,13 +81,13 @@ gen-pass:
 
 # Применение пароля
 3xui-change-password: gen-pass check-3xui
-	docker exec xray x-ui setting \
+	docker exec $(XUI_CONTAINER) x-ui setting \
 		-username admin \
 		-password "$$(cut -d: -f2 $(CREDS_FILE))"
 
 # Создание инбаунда vless без tls
 3xui-create-inbound: check-3xui
-	docker exec xray x-ui inbound add \
+	docker exec $(XUI_CONTAINER) x-ui inbound add \
 		--protocol vless \
 		--port $(NETWORK_PORT) \
 		--remark "$(INBOUND_REMARK)" \
@@ -94,22 +97,22 @@ gen-pass:
 
 # Проверка существования инбаунда
 3xui-inbound-exists:
-	@docker exec xray x-ui inbound list --json \
+	@docker exec $(XUI_CONTAINER) x-ui inbound list --json \
 		| jq -e '.[] | select(.remark=="$(INBOUND_REMARK)")' > /dev/null 2>&1 || exit 1
 
 # Создание инбаунда
 3xui-ensure-inbound:
 	@echo "🔍 Проверка inbound"
-	@if make 3xui-inbound-exists; then \
+	@if $(MAKE) 3xui-inbound-exists; then \
 		echo "Inbound уже существует"; \
 	else \
-		make 3xui-create-inbound; \
+		$(MAKE) 3xui-create-inbound; \
 	fi
 
 # Генерация ссылки подключения
 3xui-export-creds: check-3xui
 	@echo "📦 Генерация ссылки подключения"
-	@UUID=$$(docker exec xray x-ui inbound list --json \
+	@UUID=$$(docker exec $(XUI_CONTAINER) x-ui inbound list --json \
 		| jq -r '.[] | select(.remark=="$(INBOUND_REMARK)") | .clients[0].id'); \
 	echo "" >> $(CREDS_FILE); \
 	echo "Connection link:" >> $(CREDS_FILE); \
@@ -119,9 +122,9 @@ gen-pass:
 
 # Настройка 3x-ui
 3xui-init: check-3xui
-	make 3xui-change-password
-	make 3xui-ensure-inbound
-	make 3xui-export-creds
+	$(MAKE) 3xui-change-password
+	$(MAKE) 3xui-ensure-inbound
+	$(MAKE) 3xui-export-creds
 
 # Поднятие всего и сразу
 deploy:
