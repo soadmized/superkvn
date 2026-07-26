@@ -80,16 +80,30 @@ restart:
 # Генерация пароля
 gen-pass:
 	@if [ ! -f "$(CREDS_FILE)" ]; then \
-		PASS=$$(openssl rand -base64 18 | tr -d '\n'); \
+		PASS=$$(openssl rand -base64 12 | tr -d '\n'); \
 		echo "admin:$$PASS" > $(CREDS_FILE); \
 		chmod 600 $(CREDS_FILE); \
 	else \
-		echo "Пароль уже существует в $(CREDS_FILE)"; \
+		CUR_PASS=$$(cut -d: -f2 $(CREDS_FILE)); \
+		PASS_LEN=$$(echo -n "$$CUR_PASS" | wc -c); \
+		if [ $$PASS_LEN -gt 72 ]; then \
+			echo "⚠️ Текущий пароль слишком длинный для 3x-ui. Перегенерирую..."; \
+			PASS=$$(openssl rand -base64 12 | tr -d '\n'); \
+			echo "admin:$$PASS" > $(CREDS_FILE); \
+		else \
+			echo "Пароль уже существует в $(CREDS_FILE)"; \
+		fi \
 	fi
 
 # Применение настроек (пароль, порт, путь)
 3xui-settings: gen-pass check-3xui
 	docker exec $(XUI_CONTAINER) apk add --no-cache jq curl
+	@PASS=$$(cut -d: -f2 $(CREDS_FILE)); \
+	PASS_LEN=$$(echo -n "$$PASS" | wc -c); \
+	if [ $$PASS_LEN -gt 72 ]; then \
+		echo "❌ Ошибка: пароль длиннее 72 символов. Это ограничение bcrypt в 3x-ui."; \
+		exit 1; \
+	fi
 	docker exec $(XUI_CONTAINER) /app/x-ui setting \
 		-username admin \
 		-password "$$(cut -d: -f2 $(CREDS_FILE))" \
@@ -101,21 +115,23 @@ gen-pass:
 # Вспомогательные переменные для API
 COOKIE_FILE=/tmp/3xui_cookie.txt
 CSRF_TOKEN_FILE=/tmp/3xui_csrf.txt
-API_BASE=http://127.0.0.1:$(UI_PORT)$(shell [ "$(UI_DUMMY_PATH)" = "" ] && echo "/" || echo "/$(UI_DUMMY_PATH)/$(UI_PATH)/")
+API_BASE=http://127.0.0.1:$(UI_PORT)/$(UI_DUMMY_PATH)/$(UI_PATH)/
 
 # Авторизация в API
 3xui-login: check-3xui
 	@echo "🔑 Авторизация в API 3x-ui..."
 	@docker exec $(XUI_CONTAINER) apk add --no-cache curl jq > /dev/null 2>&1
 	@# Получаем CSRF токен и начальную куку
-	@docker exec $(XUI_CONTAINER) sh -c 'curl -s -c $(COOKIE_FILE) $(API_BASE) | sed -n "s/.*<meta name=\"csrf-token\" content=\"\([^\"]*\)\".*/\1/p" > $(CSRF_TOKEN_FILE)'
+	@docker exec $(XUI_CONTAINER) sh -c 'curl -s -L -c $(COOKIE_FILE) $(API_BASE) | sed -n "s/.*<meta name=\"csrf-token\" content=\"\([^\"]*\)\".*/\1/p" > $(CSRF_TOKEN_FILE)'
 	@# Логинимся
 	@docker exec $(XUI_CONTAINER) sh -c 'CSRF=$$(cat $(CSRF_TOKEN_FILE)); \
-		curl -s -b $(COOKIE_FILE) -c $(COOKIE_FILE) -X POST $(API_BASE)login \
+		if [ -z "$$CSRF" ]; then echo "❌ Не удалось получить CSRF токен. Проверьте API_BASE: $(API_BASE)"; exit 1; fi; \
+		RESPONSE=$$(curl -s -L -b $(COOKIE_FILE) -c $(COOKIE_FILE) -X POST $(API_BASE)login \
 		-H "X-Csrf-Token: $$CSRF" \
 		-H "Referer: $(API_BASE)" \
 		--data-urlencode "username=admin" \
-		--data-urlencode "password=$(shell cut -d: -f2 $(CREDS_FILE))" | grep -q "\"success\":true" || (echo "❌ Ошибка авторизации" && exit 1)'
+		--data-urlencode "password=$(shell cut -d: -f2 $(CREDS_FILE))"); \
+		echo "$$RESPONSE" | grep -q "\"success\":true" || (echo "❌ Ошибка авторизации. Ответ сервера: $$RESPONSE" && exit 1)'
 	@echo "✅ Авторизация успешна"
 
 # Создание инбаунда vless через API
