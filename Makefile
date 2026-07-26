@@ -1,4 +1,4 @@
-.PHONY: check-env check-3xui up down logs nginx-http ssl-init ssl-renew cron-install cron-remove restart gen-pass 3xui-change-password 3xui-create-inbound 3xui-inbound-exists 3xui-ensure-inbound 3xui-export-creds 3xui-init deploy
+.PHONY: check-env check-3xui up down logs nginx-http ssl-init ssl-renew cron-install cron-remove restart gen-pass 3xui-settings 3xui-create-inbound 3xui-inbound-exists 3xui-ensure-inbound 3xui-export-creds 3xui-init deploy
 
 include .env
 export
@@ -56,6 +56,10 @@ ssl-renew:
 
 cron-install:
 	@echo "⏱ Установка cron-задачи для SSL"
+	@if ! command -v crontab >/dev/null 2>&1; then \
+		echo "❌ Ошибка: crontab не установлен. Установите его (например, 'apt-get install cron') и попробуйте снова."; \
+		exit 1; \
+	fi
 	@crontab -l 2>/dev/null | grep -v 'make ssl-renew' > /tmp/cron.tmp || true
 	@echo "$(CRON_JOB)" >> /tmp/cron.tmp
 	@crontab /tmp/cron.tmp
@@ -63,6 +67,10 @@ cron-install:
 	@echo "✅ Cron-задача установлена"
 
 cron-remove:
+	@if ! command -v crontab >/dev/null 2>&1; then \
+		echo "❌ Ошибка: crontab не установлен."; \
+		exit 1; \
+	fi
 	@crontab -l 2>/dev/null | grep -v 'make ssl-renew' | crontab - || true
 
 restart:
@@ -79,11 +87,15 @@ gen-pass:
 		echo "Пароль уже существует в $(CREDS_FILE)"; \
 	fi
 
-# Применение пароля
-3xui-change-password: gen-pass check-3xui
+# Применение настроек (пароль, порт, путь)
+3xui-settings: gen-pass check-3xui
 	docker exec $(XUI_CONTAINER) x-ui setting \
 		-username admin \
-		-password "$$(cut -d: -f2 $(CREDS_FILE))"
+		-password "$$(cut -d: -f2 $(CREDS_FILE))" \
+		-port $(UI_PORT) \
+		-webpath /$(UI_DUMMY_PATH)/$(UI_PATH)
+	docker-compose restart $(XUI_CONTAINER)
+	@sleep 5
 
 # Создание инбаунда vless без tls
 3xui-create-inbound: check-3xui
@@ -122,7 +134,7 @@ gen-pass:
 
 # Настройка 3x-ui
 3xui-init: check-3xui
-	$(MAKE) 3xui-change-password
+	$(MAKE) 3xui-settings
 	$(MAKE) 3xui-ensure-inbound
 	$(MAKE) 3xui-export-creds
 
