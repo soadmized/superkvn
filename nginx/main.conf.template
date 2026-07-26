@@ -22,10 +22,6 @@ server {
     index index.html;
 
     # админка 3x-ui
-    location /${UI_DUMMY_PATH}/${UI_PATH} {
-        return 301 /${UI_DUMMY_PATH}/${UI_PATH}/;
-    }
-
     location /${UI_DUMMY_PATH}/${UI_PATH}/ {
         proxy_pass http://xray:${UI_PORT}/${UI_DUMMY_PATH}/${UI_PATH}/;
 
@@ -37,6 +33,11 @@ server {
 
         proxy_read_timeout 3600;
         proxy_send_timeout 3600;
+    }
+
+    # Редирект для админки без слеша
+    location = /${UI_DUMMY_PATH}/${UI_PATH} {
+        return 301 /${UI_DUMMY_PATH}/${UI_PATH}/;
     }
 
     # основной сайт
