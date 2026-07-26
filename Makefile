@@ -80,7 +80,7 @@ restart:
 # Генерация пароля
 gen-pass:
 	@if [ ! -f "$(CREDS_FILE)" ]; then \
-		PASS=$$(openssl rand -base64 24 | tr -d '\n'); \
+		PASS=$$(openssl rand -base64 18 | tr -d '\n'); \
 		echo "admin:$$PASS" > $(CREDS_FILE); \
 		chmod 600 $(CREDS_FILE); \
 	else \
@@ -95,7 +95,7 @@ gen-pass:
 		-password "$$(cut -d: -f2 $(CREDS_FILE))" \
 		-port $(UI_PORT) \
 		-webBasePath /$(UI_DUMMY_PATH)/$(UI_PATH)/
-	docker compose restart $(XUI_CONTAINER)
+	docker-compose restart $(XUI_CONTAINER)
 	@sleep 5
 
 # Вспомогательные переменные для API
