@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>superkvn</title>
+    <style>
+        /* Общие стили */
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Arial', sans-serif; }
+        body {
+            background-color: #121212;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Бургер меню */
+        .burger {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            cursor: pointer;
+            z-index: 100;
+        }
+        .burger div {
+            width: 30px;
+            height: 3px;
+            background-color: #fff;
+            margin: 6px 0;
+            transition: 0.4s;
+        }
+
+        /* Меню */
+        .menu {
+            position: fixed;
+            top: 0;
+            left: -250px;
+            width: 250px;
+            height: 100%;
+            background-color: #1f1f1f;
+            padding: 60px 20px;
+            transition: 0.3s;
+        }
+        .menu a {
+            display: block;
+            color: #fff;
+            text-decoration: none;
+            margin: 20px 0;
+            font-size: 18px;
+        }
+
+        .menu.active { left: 0; }
+
+        /* Контент */
+        .container {
+            text-align: center;
+            z-index: 1;
+        }
+
+        .animated-text {
+            font-size: 2rem;
+            margin-bottom: 40px;
+            overflow: hidden;
+            white-space: nowrap;
+            border-right: 0.15em solid #fff;
+            animation: typing 3s steps(40, end) infinite, blink 0.75s step-end infinite;
+        }
+
+        @keyframes typing {
+            0% { width: 0 }
+            50% { width: 100% }
+            100% { width: 0 }
+        }
+        @keyframes blink {
+            50% { border-color: transparent; }
+        }
+
+        /* Форма логина */
+        .login-box {
+            background-color: #1f1f1f;
+            padding: 30px;
+            border-radius: 10px;
+            display: inline-block;
+        }
+        .login-box input {
+            width: 250px;
+            padding: 10px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 5px;
+            background-color: #2a2a2a;
+            color: #fff;
+        }
+        .login-box button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            background-color: #ff4c4c;
+            color: #fff;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .error {
+            color: #ff4c4c;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Бургер меню -->
+<div class="burger" onclick="toggleMenu()">
+    <div></div>
+    <div></div>
+    <div></div>
+</div>
+
+<nav class="menu" id="menu">
+    <a href="#">Главная</a>
+    <a href="#">О нас</a>
+    <a href="#">Функции</a>
+    <a href="#">Контакты</a>
+</nav>
+
+<div class="container">
+    <div class="animated-text">superkvn - соцсеть нового поколения</div>
+
+    <div class="login-box">
+        <input type="text" id="username" placeholder="Логин">
+        <input type="password" id="password" placeholder="Пароль">
+        <button onclick="login()">Войти</button>
+        <div class="error" id="error">Логин или пароль неверный</div>
+    </div>
+</div>
+
+<script>
+  function toggleMenu() {
+    document.getElementById('menu').classList.toggle('active');
+  }
+
+  function login() {
+    document.getElementById('error').style.display = 'block';
+  }
+</script>
+
+</body>
+</html>

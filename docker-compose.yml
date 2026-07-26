@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  nginx:
+    build: .
+    networks:
+      - vless
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    restart: unless-stopped
+
+  xray:
+    image: ghcr.io/mhsanaei/3x-ui:latest
+    container_name: xray
+    volumes:
+      - ./db:/etc/x-ui
+    env_file:
+      - .env
+    ports:
+      - "${UI_PORT}:${UI_PORT}"
+    expose:
+      - "${NETWORK_PORT}"
+    restart: unless-stopped
+    networks:
+      - vless
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+
+
+networks:
+  vless:
+    driver: bridge
