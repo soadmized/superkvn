@@ -1,3 +1,5 @@
+.PHONY: check-env check-3xui up down logs nginx-http ssl-init ssl-renew cron-install cron-remove restart gen-pass 3xui-settings 3xui-create-inbound 3xui-inbound-exists 3xui-ensure-inbound 3xui-export-creds 3xui-init deploy
+
 include .env
 export
 
@@ -5,8 +7,9 @@ export
 
 XUI_PASS_FILE=$(HOME)/creds.txt
 CREDS_FILE=$(HOME)/creds.txt
+XUI_CONTAINER=xray
 INBOUND_REMARK=$(DOMAIN)-$(NETWORK_PORT)
-CRON_CMD=cd $(PWD) && make ssl-renew >> /var/log/ssl-renew.log 2>&1
+CRON_CMD=cd $(PWD) && $(MAKE) ssl-renew >> /var/log/ssl-renew.log 2>&1
 CRON_JOB=0 3 * * * $(CRON_CMD)
 
 check-env:
@@ -53,6 +56,10 @@ ssl-renew:
 
 cron-install:
 	@echo "⏱ Установка cron-задачи для SSL"
+	@if ! command -v crontab >/dev/null 2>&1; then \
+		echo "❌ Ошибка: crontab не установлен. Установите его (например, 'apt-get install cron') и попробуйте снова."; \
+		exit 1; \
+	fi
 	@crontab -l 2>/dev/null | grep -v 'make ssl-renew' > /tmp/cron.tmp || true
 	@echo "$(CRON_JOB)" >> /tmp/cron.tmp
 	@crontab /tmp/cron.tmp
@@ -60,68 +67,119 @@ cron-install:
 	@echo "✅ Cron-задача установлена"
 
 cron-remove:
+	@if ! command -v crontab >/dev/null 2>&1; then \
+		echo "❌ Ошибка: crontab не установлен."; \
+		exit 1; \
+	fi
 	@crontab -l 2>/dev/null | grep -v 'make ssl-renew' | crontab - || true
 
 restart:
-	make down
-	make up
+	$(MAKE) down
+	$(MAKE) up
 
 # Генерация пароля
 gen-pass:
 	@if [ ! -f "$(CREDS_FILE)" ]; then \
-		PASS=$$(openssl rand -base64 24 | tr -d '\n'); \
+		PASS=$$(openssl rand -base64 12 | tr -d '\n'); \
 		echo "admin:$$PASS" > $(CREDS_FILE); \
 		chmod 600 $(CREDS_FILE); \
 	else \
-		echo "Пароль уже существует в $(CREDS_FILE)"; \
+		CUR_PASS=$$(cut -d: -f2 $(CREDS_FILE)); \
+		PASS_LEN=$$(echo -n "$$CUR_PASS" | wc -c); \
+		if [ $$PASS_LEN -gt 72 ]; then \
+			echo "⚠️ Текущий пароль слишком длинный для 3x-ui. Перегенерирую..."; \
+			PASS=$$(openssl rand -base64 12 | tr -d '\n'); \
+			echo "admin:$$PASS" > $(CREDS_FILE); \
+		else \
+			echo "Пароль уже существует в $(CREDS_FILE)"; \
+		fi \
 	fi
 
-# Применение пароля
-3xui-change-password: gen-pass check-3xui
-	docker exec xray x-ui setting \
+# Применение настроек (пароль, порт, путь)
+3xui-settings: gen-pass check-3xui
+	docker exec $(XUI_CONTAINER) apk add --no-cache jq curl
+	@PASS=$$(cut -d: -f2 $(CREDS_FILE)); \
+	PASS_LEN=$$(echo -n "$$PASS" | wc -c); \
+	if [ $$PASS_LEN -gt 72 ]; then \
+		echo "❌ Ошибка: пароль длиннее 72 символов. Это ограничение bcrypt в 3x-ui."; \
+		exit 1; \
+	fi
+	docker exec $(XUI_CONTAINER) /app/x-ui setting \
 		-username admin \
-		-password "$$(cut -d: -f2 $(CREDS_FILE))"
+		-password "$$(cut -d: -f2 $(CREDS_FILE))" \
+		-port $(UI_PORT) \
+		-webBasePath /$(UI_DUMMY_PATH)/$(UI_PATH)/
+	docker compose restart $(XUI_CONTAINER)
+	@sleep 5
 
-# Создание инбаунда vless без tls
-3xui-create-inbound: check-3xui
-	docker exec xray x-ui inbound add \
-		--protocol vless \
-		--port $(NETWORK_PORT) \
-		--remark "$(INBOUND_REMARK)" \
-		--transport ws \
-		--path /$(NETWORK_PATH) \
-		--enable
+# Вспомогательные переменные для API
+COOKIE_FILE=/tmp/3xui_cookie.txt
+CSRF_TOKEN_FILE=/tmp/3xui_csrf.txt
+API_BASE=http://127.0.0.1:$(UI_PORT)/$(UI_DUMMY_PATH)/$(UI_PATH)/
 
-# Проверка существования инбаунда
-3xui-inbound-exists:
-	@docker exec xray x-ui inbound list --json \
-		| jq -e '.[] | select(.remark=="$(INBOUND_REMARK)")' > /dev/null 2>&1 || exit 1
+# Авторизация в API
+3xui-login: check-3xui
+	@echo "🔑 Авторизация в API 3x-ui..."
+	@docker exec $(XUI_CONTAINER) apk add --no-cache curl jq > /dev/null 2>&1
+	@# Получаем CSRF токен и начальную куку
+	@docker exec $(XUI_CONTAINER) sh -c 'curl -s -L -c $(COOKIE_FILE) $(API_BASE) | sed -n "s/.*<meta name=\"csrf-token\" content=\"\([^\"]*\)\".*/\1/p" > $(CSRF_TOKEN_FILE)'
+	@# Логинимся
+	@docker exec $(XUI_CONTAINER) sh -c 'CSRF=$$(cat $(CSRF_TOKEN_FILE)); \
+		if [ -z "$$CSRF" ]; then echo "❌ Не удалось получить CSRF токен. Проверьте API_BASE: $(API_BASE)"; exit 1; fi; \
+		RESPONSE=$$(curl -s -L -b $(COOKIE_FILE) -c $(COOKIE_FILE) -X POST $(API_BASE)login \
+		-H "X-Csrf-Token: $$CSRF" \
+		-H "Referer: $(API_BASE)" \
+		--data-urlencode "username=admin" \
+		--data-urlencode "password=$(shell cut -d: -f2 $(CREDS_FILE))"); \
+		echo "$$RESPONSE" | grep -q "\"success\":true" || (echo "❌ Ошибка авторизации. Ответ сервера: $$RESPONSE" && exit 1)'
+	@echo "✅ Авторизация успешна"
+
+# Создание инбаунда vless через API
+3xui-create-inbound: 3xui-login
+	@echo "🛠 Создание инбаунда через API..."
+	@docker exec $(XUI_CONTAINER) sh -c 'CSRF=$$(cat $(CSRF_TOKEN_FILE)); \
+		UUID=$$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16 | sed "s/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/"); \
+		JSON=$$(printf "{\"enable\": true, \"remark\": \"$(INBOUND_REMARK)\", \"listen\": \"\", \"port\": $(NETWORK_PORT), \"protocol\": \"vless\", \"settings\": \"{\\\"clients\\\": [{\\\"id\\\": \\\"%s\\\", \\\"alterId\\\": 0, \\\"email\\\": \\\"user\\\", \\\"totalGB\\\": 0, \\\"expiryTime\\\": 0}], \\\"decryption\\\": \\\"none\\\", \\\"fallbacks\\\": []}\", \"streamSettings\": \"{\\\"network\\\": \\\"ws\\\", \\\"security\\\": \\\"none\\\", \\\"wsSettings\\\": {\\\"path\\\": \\\"/$(NETWORK_PATH)\\\", \\\"headers\\\": {}}}\", \"sniffing\": \"{\\\"enabled\\\": false}\", \"tag\": \"inbound-$(NETWORK_PORT)\"}" "$$UUID"); \
+		curl -s -b $(COOKIE_FILE) -X POST $(API_BASE)panel/api/inbounds/add \
+		-H "X-Csrf-Token: $$CSRF" \
+		-H "Content-Type: application/json" \
+		-d "$$JSON" | grep -q "\"success\":true" || (echo "❌ Ошибка создания инбаунда" && exit 1)'
+	@echo "✅ Инбаунд создан"
+
+# Проверка существования инбаунда через API
+3xui-inbound-exists: 3xui-login
+	@docker exec $(XUI_CONTAINER) sh -c 'curl -s -b $(COOKIE_FILE) $(API_BASE)panel/api/inbounds/list \
+		| jq -e ".obj[] | select(.remark==\"$(INBOUND_REMARK)\" or .port==$(NETWORK_PORT))" > /dev/null'
 
 # Создание инбаунда
 3xui-ensure-inbound:
 	@echo "🔍 Проверка inbound"
-	@if make 3xui-inbound-exists; then \
+	@if $(MAKE) 3xui-inbound-exists; then \
 		echo "Inbound уже существует"; \
 	else \
-		make 3xui-create-inbound; \
+		$(MAKE) 3xui-create-inbound; \
 	fi
 
-# Генерация ссылки подключения
-3xui-export-creds: check-3xui
-	@echo "📦 Генерация ссылки подключения"
-	@UUID=$$(docker exec xray x-ui inbound list --json \
-		| jq -r '.[] | select(.remark=="$(INBOUND_REMARK)") | .clients[0].id'); \
-	echo "" >> $(CREDS_FILE); \
-	echo "Connection link:" >> $(CREDS_FILE); \
-	echo "vless://$$UUID@$(DOMAIN):443?type=ws&encryption=none&path=%2F$(NETWORK_PATH)&host=$(DOMAIN)&security=tls&sni=$(DOMAIN)&fp=chrome&alpn=h2%2Chttp%2F1.1" \
-		>> $(CREDS_FILE); \
-	echo "✅ Ссылка добавлена в $(CREDS_FILE)"
+# Генерация ссылки подключения через API
+3xui-export-creds: 3xui-login
+	@echo "📦 Попытка генерации ссылки подключения"
+	@UUID=$$(docker exec $(XUI_CONTAINER) sh -c 'curl -s -b $(COOKIE_FILE) $(API_BASE)panel/api/inbounds/list \
+		| jq -r ".obj[] | select(.remark==\"$(INBOUND_REMARK)\" or .port==$(NETWORK_PORT)) | .settings" | jq -r ".clients[0].id"'); \
+	if [ -z "$$UUID" ] || [ "$$UUID" = "null" ]; then \
+		echo "❌ Не удалось найти инбаунд через API."; \
+	else \
+		echo "" >> $(CREDS_FILE); \
+		echo "Connection link:" >> $(CREDS_FILE); \
+		echo "vless://$$UUID@$(DOMAIN):443?type=ws&encryption=none&path=%2F$(NETWORK_PATH)&security=tls&sni=$(DOMAIN)" \
+			>> $(CREDS_FILE); \
+		echo "✅ Ссылка добавлена в $(CREDS_FILE)"; \
+	fi
 
 # Настройка 3x-ui
 3xui-init: check-3xui
-	make 3xui-change-password
-	make 3xui-ensure-inbound
-	make 3xui-export-creds
+	$(MAKE) 3xui-settings
+	$(MAKE) 3xui-ensure-inbound
+	$(MAKE) 3xui-export-creds
 
 # Поднятие всего и сразу
 deploy:
@@ -130,4 +188,6 @@ deploy:
 	$(MAKE) cron-install
 	$(MAKE) restart
 	$(MAKE) 3xui-init
-	@echo "Деплой завершён! Ссылка подключения и креды для админки в $(CREDS_FILE)"
+	@echo "🔍 Проверка логов xray для диагностики:"
+	@docker compose logs --tail=20 $(XUI_CONTAINER)
+	@echo "Установка завершена! Ссылка подключения и креды для админки в $(CREDS_FILE)"

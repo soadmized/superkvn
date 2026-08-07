@@ -12,7 +12,7 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
     server_name ${DOMAIN} www.${DOMAIN};
 
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
@@ -35,6 +35,11 @@ server {
         proxy_send_timeout 3600;
     }
 
+    # Редирект для админки без слеша
+    location = /${UI_DUMMY_PATH}/${UI_PATH} {
+        return 301 /${UI_DUMMY_PATH}/${UI_PATH}/;
+    }
+
     # основной сайт
     location / {
         try_files $uri $uri/ =404;
@@ -49,7 +54,6 @@ server {
     location /${NETWORK_PATH} {
         proxy_pass http://xray:${NETWORK_PORT};
         proxy_http_version 1.1;
-
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
