@@ -26,22 +26,22 @@ check-3xui:
 up: check-env
 	envsubst '$$DOMAIN $$UI_DUMMY_PATH $$UI_PATH $$UI_PORT $$NETWORK_PATH $$NETWORK_PORT' \
 		< nginx/main.conf.template > nginx/default.conf
-	docker-compose up -d --build --force-recreate
+	docker compose up -d --build --force-recreate
 
 down:
-	docker-compose down
+	docker compose down
 
 logs:
-	docker-compose logs -f nginx
+	docker compose logs -f nginx
 
 nginx-http: check-env
 	envsubst '$$DOMAIN $$UI_DUMMY_PATH $$UI_PATH $$UI_PORT $$NETWORK_PATH $$NETWORK_PORT' \
 		< nginx/no_ssl.conf.template > nginx/default.conf
-	docker-compose up -d --force-recreate --build nginx
+	docker compose up -d --force-recreate --build nginx
 
 ssl-init: check-env
 	@echo "🔐 Выпуск SSL-сертификата для $(DOMAIN)"
-	docker-compose run --rm certbot certonly \
+	docker compose run --rm certbot certonly \
 		--webroot \
 		--webroot-path=/var/www/certbot \
 		--email $(EMAIL) \
@@ -51,8 +51,8 @@ ssl-init: check-env
 
 ssl-renew:
 	@echo "♻️ Обновление SSL-сертификатов"
-	docker-compose run --rm certbot renew
-	docker-compose restart nginx
+	docker compose run --rm certbot renew
+	docker compose restart nginx
 
 cron-install:
 	@echo "⏱ Установка cron-задачи для SSL"
@@ -109,7 +109,7 @@ gen-pass:
 		-password "$$(cut -d: -f2 $(CREDS_FILE))" \
 		-port $(UI_PORT) \
 		-webBasePath /$(UI_DUMMY_PATH)/$(UI_PATH)/
-	docker-compose restart $(XUI_CONTAINER)
+	docker compose restart $(XUI_CONTAINER)
 	@sleep 5
 
 # Вспомогательные переменные для API
@@ -139,7 +139,7 @@ API_BASE=http://127.0.0.1:$(UI_PORT)/$(UI_DUMMY_PATH)/$(UI_PATH)/
 	@echo "🛠 Создание инбаунда через API..."
 	@docker exec $(XUI_CONTAINER) sh -c 'CSRF=$$(cat $(CSRF_TOKEN_FILE)); \
 		UUID=$$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16 | sed "s/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/"); \
-		JSON=$$(printf "{\"enable\": true, \"remark\": \"$(INBOUND_REMARK)\", \"listen\": \"\", \"port\": $(NETWORK_PORT), \"protocol\": \"vless\", \"settings\": \"{\\\"clients\\\": [{\\\"id\\\": \\\"%s\\\", \\\"alterId\\\": 0, \\\"email\\\": \\\"user\\\", \\\"totalGB\\\": 0, \\\"expiryTime\\\": 0}], \\\"decryption\\\": \\\"none\\\", \\\"fallbacks\\\": []}\", \"streamSettings\": \"{\\\"network\\\": \\\"ws\\\", \\\"security\\\": \\\"none\\\", \\\"wsSettings\\\": {\\\"path\\\": \\\"/$(NETWORK_PATH)\\\", \\\"headers\\\": {}}}\", \"sniffing\": \"{\\\"enabled\\\": true, \\\"destOverride\\\": [\\\"http\\\", \\\"tls\\\"]}\", \"tag\": \"inbound-$(NETWORK_PORT)\"}" "$$UUID"); \
+		JSON=$$(printf "{\"enable\": true, \"remark\": \"$(INBOUND_REMARK)\", \"listen\": \"\", \"port\": $(NETWORK_PORT), \"protocol\": \"vless\", \"settings\": \"{\\\"clients\\\": [{\\\"id\\\": \\\"%s\\\", \\\"alterId\\\": 0, \\\"email\\\": \\\"user\\\", \\\"totalGB\\\": 0, \\\"expiryTime\\\": 0}], \\\"decryption\\\": \\\"none\\\", \\\"fallbacks\\\": []}\", \"streamSettings\": \"{\\\"network\\\": \\\"ws\\\", \\\"security\\\": \\\"none\\\", \\\"wsSettings\\\": {\\\"path\\\": \\\"/$(NETWORK_PATH)\\\", \\\"headers\\\": {}}}\", \"sniffing\": \"{\\\"enabled\\\": false}\", \"tag\": \"inbound-$(NETWORK_PORT)\"}" "$$UUID"); \
 		curl -s -b $(COOKIE_FILE) -X POST $(API_BASE)panel/api/inbounds/add \
 		-H "X-Csrf-Token: $$CSRF" \
 		-H "Content-Type: application/json" \
@@ -170,7 +170,7 @@ API_BASE=http://127.0.0.1:$(UI_PORT)/$(UI_DUMMY_PATH)/$(UI_PATH)/
 	else \
 		echo "" >> $(CREDS_FILE); \
 		echo "Connection link:" >> $(CREDS_FILE); \
-		echo "vless://$$UUID@$(DOMAIN):443?type=ws&encryption=none&path=%2F$(NETWORK_PATH)&host=$(DOMAIN)&security=tls&sni=$(DOMAIN)&fp=chrome&alpn=h2%2Chttp%2F1.1" \
+		echo "vless://$$UUID@$(DOMAIN):443?type=ws&encryption=none&path=%2F$(NETWORK_PATH)&security=tls&sni=$(DOMAIN)" \
 			>> $(CREDS_FILE); \
 		echo "✅ Ссылка добавлена в $(CREDS_FILE)"; \
 	fi
@@ -188,4 +188,6 @@ deploy:
 	$(MAKE) cron-install
 	$(MAKE) restart
 	$(MAKE) 3xui-init
-	@echo "Деплой завершён! Ссылка подключения и креды для админки в $(CREDS_FILE)"
+	@echo "🔍 Проверка логов xray для диагностики:"
+	@docker compose logs --tail=20 $(XUI_CONTAINER)
+	@echo "Установка завершена! Ссылка подключения и креды для админки в $(CREDS_FILE)"
